@@ -9,6 +9,13 @@ eph = load('de421.bsp')
 earth, sun, moon = eph['earth'], eph['sun'], eph['moon']
 
 
+def ekstrak_waktu(t_arr, ev_arr, target_ev: int) -> list:
+    """Mengambil daftar objek Time secara aman baik berbentuk skalar maupun array."""
+    if getattr(t_arr, 'shape', ()) == ():
+        return [t_arr] if int(ev_arr) == target_ev else []
+    return [t_arr[i] for i in range(len(t_arr)) if int(ev_arr[i]) == target_ev]
+
+
 def hitung_dip_derajat(elevasi_m: float) -> float:
     """Kerendahan ufuk (dip) dalam derajat berdasarkan elevasi pengamat (meter)."""
     if elevasi_m <= 0:
@@ -22,7 +29,7 @@ def cari_ijtimak_terdekat(t_ref):
     t1 = ts.tt_jd(t_ref.tt + 15)
     f = almanac.oppositions_conjunctions(eph, moon)
     times, events = almanac.find_discrete(t0, t1, f)
-    konjungsi = [times[i] for i in range(len(events)) if int(events[i]) == 1]
+    konjungsi = ekstrak_waktu(times, events, 1)
     if len(konjungsi) == 0:
         return None
     return min(konjungsi, key=lambda ti: abs(ti.tt - t_ref.tt))
@@ -82,16 +89,17 @@ def hisab_ghurub(nama: str, lat: float, lon: float, elev_m: float, tz_jam: float
 
     f_sun = almanac.risings_and_settings(eph, sun, topos, horizon_degrees=alt_sunset_deg)
     t_events, events = almanac.find_discrete(t0, t1, f_sun)
-    sunsets = [t_events[i] for i in range(len(events)) if int(events[i]) == 0]
+    sunsets = ekstrak_waktu(t_events, events, 0)
     if len(sunsets) == 0:
         return {"Kota": nama, "Error": "Ghurub tidak ditemukan"}
     t_ghurub = sunsets[0]
 
     # Waktu Moonset terdekat setelah ghurub
     f_moon = almanac.risings_and_settings(eph, moon, topos, horizon_degrees=alt_sunset_deg)
-    tm_events, m_events = almanac.find_discrete(t0, ts.tt_jd(t1.tt + 0.25), f_moon)
-    moonsets = [tm_events[i] for i in range(len(m_events)) if int(m_events[i]) == 0]
-    t_moonset = moonsets[0] if len(moonsets) > 0 else None
+    tm_events, m_events = almanac.find_discrete(t0, ts.tt_jd(t1.tt + 0.5), f_moon)
+    moonsets = ekstrak_waktu(tm_events, m_events, 0)
+    moonsets_setelah = [tm for tm in moonsets if tm.tt >= t_ghurub.tt]
+    t_moonset = moonsets_setelah[0] if len(moonsets_setelah) > 0 else None
     lag_menit = float((t_moonset.tt - t_ghurub.tt) * 1440.0) if t_moonset is not None else 0.0
 
     # Posisi Toposentris saat Ghurub

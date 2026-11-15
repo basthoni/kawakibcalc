@@ -9,9 +9,42 @@ ts = load.timescale()
 eph = load('de421.bsp')
 earth, sun, moon = eph['earth'], eph['sun'], eph['moon']
 
+NAMA_HARI = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Ahad"]
+NAMA_BULAN_MASEHI = [
+    "", "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+]
+
+
+def format_tanggal_id(dt_obj: datetime) -> str:
+    return f"{dt_obj.day} {NAMA_BULAN_MASEHI[dt_obj.month]} {dt_obj.year}"
+
+
+def format_hari_id(dt_obj: datetime) -> str:
+    return NAMA_HARI[dt_obj.weekday()]
+
+
+def split_dms(deg: float) -> tuple:
+    """Memecah derajat desimal menjadi 3 kolom terpisah (derajat, menit, detik) ala Kemenag."""
+    val = float(deg)
+    neg = val < 0
+    val = abs(val)
+    d = int(val)
+    m_full = (val - d) * 60.0
+    m = int(m_full)
+    s = round((m_full - m) * 60.0, 1)
+    if s >= 60.0:
+        s = 0.0
+        m += 1
+    if m >= 60:
+        m = 0
+        d += 1
+    d_str = f"-{d}" if neg else f"{d}"
+    return d_str, m, s
+
 
 def deg_to_dms(deg: float, is_azimuth: bool = False) -> str:
-    """Konversi derajat desimal ke format standar falak (±DD° MM′ SS.S″)."""
+    """Konversi derajat desimal ke teks (±DD° MM′ SS.S″)."""
     val = float(deg)
     if is_azimuth:
         val = val % 360.0
@@ -27,7 +60,7 @@ def deg_to_dms(deg: float, is_azimuth: bool = False) -> str:
 
 
 def ra_to_hms(ra_hours: float) -> str:
-    """Konversi Asensio Rekta (jam) ke format HHj MMm SS.Ss."""
+    """Konversi Asensio Rekta (jam) ke format HHj MMm SS.Sd."""
     val = float(ra_hours) % 24.0
     h = int(val)
     m_full = (val - h) * 60.0
@@ -50,12 +83,23 @@ def hitung_dip_derajat(elevasi_m: float) -> float:
     return 1.76 * math.sqrt(elevasi_m) / 60.0
 
 
+def cari_ijtimak_terdekat(t_ref):
+    """Mencari waktu konjungsi geosentris (ijtimak) terdekat dalam rentang ±15 hari."""
+    t0 = ts.tt_jd(t_ref.tt - 15)
+    t1 = ts.tt_jd(t_ref.tt + 15)
+    f = almanac.oppositions_conjunctions(eph, moon)
+    times, events = almanac.find_discrete(t0, t1, f)
+    konjungsi = ekstrak_waktu(times, events, 1)
+    if len(konjungsi) == 0:
+        return None
+    return min(konjungsi, key=lambda ti: abs(ti.tt - t_ref.tt))
+
+
 def cari_fase_dan_apsis(t_ref):
     """Mencari Ijtimak, Purnama, Perigee, dan Apogee terdekat dalam rentang ±16 hari."""
     t0 = ts.tt_jd(t_ref.tt - 16)
     t1 = ts.tt_jd(t_ref.tt + 16)
 
-    # Konjungsi (1) & Oposisi (0)
     f_conj = almanac.oppositions_conjunctions(eph, moon)
     times, events = almanac.find_discrete(t0, t1, f_conj)
     ijtimak_list = ekstrak_waktu(times, events, 1)
@@ -64,7 +108,6 @@ def cari_fase_dan_apsis(t_ref):
     t_ijtimak = min(ijtimak_list, key=lambda ti: abs(ti.tt - t_ref.tt)) if ijtimak_list else None
     t_purnama = min(purnama_list, key=lambda ti: abs(ti.tt - t_ref.tt)) if purnama_list else None
 
-    # Perigee & Apogee melalui sampling jarak setiap 15 menit
     jd_grid = np.linspace(t_ref.tt - 15.0, t_ref.tt + 15.0, 2881)
     t_grid = ts.tt_jd(jd_grid)
     dists = earth.at(t_grid).observe(moon).distance().km
@@ -84,13 +127,9 @@ def cari_fase_dan_apsis(t_ref):
 def evaluasi_kriteria(alt_topo: float, arcv_geo: float, elong_geo: float,
                       lebar_sabit_arcmin: float, lag_menit: float, umur_jam: float) -> dict:
     """Evaluasi visibilitas hilal: Neo-MABIMS, Wujudul Hilal, Yallop, Odeh, dan Babylonian."""
-    # 1. Neo-MABIMS (Tinggi Mar'i >= 3.0 deg & Elongasi Geosentris >= 6.4 deg)
     imkan_mabims = (alt_topo >= 3.0) and (elong_geo >= 6.4)
-
-    # 2. Wujudul Hilal (Tinggi > 0 deg & sudah ijtimak sebelum ghurub)
     wujud = (alt_topo > 0.0) and (umur_jam > 0.0)
 
-    # 3. Yallop (1997) - Parameter q
     w = lebar_sabit_arcmin
     arcv_yallop = 11.8371 - 6.3226 * w + 0.7319 * (w ** 2) - 0.1018 * (w ** 3)
     q = (arcv_geo - arcv_yallop) / 10.0
@@ -108,7 +147,6 @@ def evaluasi_kriteria(alt_topo: float, arcv_geo: float, elong_geo: float,
     else:
         kat_yallop = "F (Di bawah limit Danjon / Mustahil)"
 
-    # 4. Odeh (2004) - Parameter V
     arcv_odeh = -0.1018 * (w ** 3) + 0.7319 * (w ** 2) - 6.3226 * w + 7.1651
     v_odeh = arcv_geo - arcv_odeh
     if v_odeh >= 5.65:
@@ -120,7 +158,6 @@ def evaluasi_kriteria(alt_topo: float, arcv_geo: float, elong_geo: float,
     else:
         kat_odeh = "D (Tidak terlihat)"
 
-    # 5. Babylonian Klasik
     babylonian = (umur_jam > 24.0) and (lag_menit > 48.0)
 
     return {
@@ -144,7 +181,6 @@ def _ukur_posisi_seketika(observer, t_obj, tekan_mbar: float):
     ra_s, dec_s, _ = astro_sun.radec()
     ra_m, dec_m, _ = astro_moon.radec()
 
-    # Tinggi tanpa refraksi & koreksi paralaks untuk ARCV Geosentris
     alt_s_noref, _, _ = astro_sun.altaz(pressure_mbar=0.0)
     alt_m_noref, _, _ = astro_moon.altaz(pressure_mbar=0.0)
     hp_moon = math.degrees(math.asin(6378.14 / float(dist_m.km)))
@@ -153,15 +189,12 @@ def _ukur_posisi_seketika(observer, t_obj, tekan_mbar: float):
     alt_s_geo = float(alt_s_noref.degrees) + hp_sun * math.cos(math.radians(float(alt_s_noref.degrees)))
     arcv_geo = alt_m_geo - alt_s_geo
 
-    # Elongasi
     geo_sun = earth.at(t_obj).observe(sun).apparent()
     geo_moon = earth.at(t_obj).observe(moon).apparent()
     elong_geo = float(geo_sun.separation_from(geo_moon).degrees)
     elong_topo = float(astro_sun.separation_from(astro_moon).degrees)
 
-    # Semidiameter, Iluminasi (Fase), dan Lebar Sabit
     sd_moon_arcmin = math.degrees(math.asin(1737.4 / float(dist_m.km))) * 60.0
-    sd_sun_arcmin = math.degrees(math.asin(696340.0 / float(dist_s.km))) * 60.0
     iluminasi_persen = 50.0 * (1.0 - math.cos(math.radians(elong_topo)))
     lebar_sabit_arcmin = sd_moon_arcmin * (1.0 - math.cos(math.radians(elong_topo)))
 
@@ -180,7 +213,6 @@ def _ukur_posisi_seketika(observer, t_obj, tekan_mbar: float):
         "elong_geo": elong_geo,
         "elong_topo": elong_topo,
         "sd_moon_arcmin": sd_moon_arcmin,
-        "sd_sun_arcmin": sd_sun_arcmin,
         "iluminasi_persen": iluminasi_persen,
         "lebar_sabit_arcmin": lebar_sabit_arcmin,
         "dist_moon_km": float(dist_m.km),
@@ -195,7 +227,6 @@ def hisab_lengkap_markaz(nama: str, lat: float, lon: float, elev_m: float, tz_ja
     tz = timezone(timedelta(hours=tz_jam))
     tekanan = 1010.0 if refraksi else 0.0
 
-    # --- LAYAR 1: WAKTU PILIHAN PENGGUNA ---
     dt_lokal_user = dt_pilihan.replace(tzinfo=tz)
     t_user = ts.from_datetime(dt_lokal_user)
     pos_user = _ukur_posisi_seketika(observer, t_user, tekanan)
@@ -203,7 +234,6 @@ def hisab_lengkap_markaz(nama: str, lat: float, lon: float, elev_m: float, tz_ja
     t_ijtimak = fase_apsis["ijtimak"]
     umur_user = float((t_user.tt - t_ijtimak.tt) * 24.0) if t_ijtimak is not None else 0.0
 
-    # Terbit & Terbenam Matahari dan Bulan pada tanggal pilihan
     dt_awal = datetime(dt_pilihan.year, dt_pilihan.month, dt_pilihan.day, 0, 0, 0, tzinfo=tz)
     dt_akhir = dt_awal + timedelta(days=1)
     t0, t1 = ts.from_datetime(dt_awal), ts.from_datetime(dt_akhir)
@@ -232,7 +262,6 @@ def hisab_lengkap_markaz(nama: str, lat: float, lon: float, elev_m: float, tz_ja
 
     lag_menit = float((t_moonset.tt - t_ghurub.tt) * 1440.0) if (t_ghurub is not None and t_moonset is not None) else 0.0
 
-    # --- LAYAR 2: SAAT APPARENT SUNSET (GHURUB) ---
     if t_ghurub is not None:
         pos_ghurub = _ukur_posisi_seketika(observer, t_ghurub, tekanan)
         umur_ghurub = float((t_ghurub.tt - t_ijtimak.tt) * 24.0) if t_ijtimak is not None else 0.0
@@ -245,7 +274,6 @@ def hisab_lengkap_markaz(nama: str, lat: float, lon: float, elev_m: float, tz_ja
             umur_jam=umur_ghurub,
         )
 
-        # --- LAYAR 3: MATAHARI -5 DERAJAT & BEST TIME (YALLOP/BRUIN) ---
         jd_scan = np.linspace(t_ghurub.tt, t_ghurub.tt + (90.0 / 1440.0), 181)
         t_scan = ts.tt_jd(jd_scan)
         alt_sun_scan, _, _ = observer.at(t_scan).observe(sun).apparent().altaz(pressure_mbar=0.0)
@@ -333,6 +361,56 @@ def hisab_ghurub(nama: str, lat: float, lon: float, elev_m: float, tz_jam: float
     }
 
 
+def susun_baris_rekap_kemenag(nama_bulan: str, tgl_29: datetime, daftar_markaz: list, refraksi: bool = True) -> dict:
+    """Menyusun 1 baris rekap persis sesuai kolom Google Sheet Sinkronisasi Kemenag."""
+    tz_wib = timezone(timedelta(hours=7.0))
+    t_ref = ts.from_datetime(datetime(tgl_29.year, tgl_29.month, tgl_29.day, 18, 0, 0, tzinfo=tz_wib))
+    t_ijtimak = cari_ijtimak_terdekat(t_ref)
+    dt_ijtimak_wib = t_ijtimak.astimezone(tz_wib) if t_ijtimak is not None else tgl_29
+
+    hasil_kota = []
+    for nama, lat, lon, elev, tz_lokal in daftar_markaz:
+        res = hisab_ghurub(nama, lat, lon, elev, tz_lokal, tgl_29.year, tgl_29.month, tgl_29.day, refraksi)
+        hasil_kota.append(res)
+
+    terendah = min(hasil_kota, key=lambda x: x["Tinggi_Deg"])
+    tertinggi = max(hasil_kota, key=lambda x: x["Tinggi_Deg"])
+    ada_imkan = any(x["Neo_MABIMS"] == "IMKAN RUKYAT" for x in hasil_kota)
+
+    dt_awal_bulan = tgl_29 + timedelta(days=1 if ada_imkan else 2)
+
+    t_low_d, t_low_m, t_low_s = split_dms(terendah["Tinggi_Deg"])
+    e_low_d, e_low_m, e_low_s = split_dms(terendah["Elongasi_Deg"])
+
+    t_high_d, t_high_m, t_high_s = split_dms(tertinggi["Tinggi_Deg"])
+    e_high_d, e_high_m, e_high_s = split_dms(tertinggi["Elongasi_Deg"])
+
+    return {
+        "BULAN": nama_bulan,
+        "IJTIMAK_HARI": format_hari_id(dt_ijtimak_wib),
+        "IJTIMAK_TANGGAL": format_tanggal_id(dt_ijtimak_wib),
+        "IJTIMAK_JAM_WIB": dt_ijtimak_wib.strftime("%H:%M:%S"),
+        "TANGGAL_29": f"{format_hari_id(tgl_29)}, {format_tanggal_id(tgl_29)}",
+        "TERENDAH_LOKASI": terendah["Kota"],
+        "TERENDAH_TINGGI_DEG": t_low_d,
+        "TERENDAH_TINGGI_MNT": t_low_m,
+        "TERENDAH_TINGGI_DTK": t_low_s,
+        "TERENDAH_ELONG_DEG": e_low_d,
+        "TERENDAH_ELONG_MNT": e_low_m,
+        "TERENDAH_ELONG_DTK": e_low_s,
+        "TERTINGGI_LOKASI": tertinggi["Kota"],
+        "TERTINGGI_TINGGI_DEG": t_high_d,
+        "TERTINGGI_TINGGI_MNT": t_high_m,
+        "TERTINGGI_TINGGI_DTK": t_high_s,
+        "TERTINGGI_ELONG_DEG": e_high_d,
+        "TERTINGGI_ELONG_MNT": e_high_m,
+        "TERTINGGI_ELONG_DTK": e_high_s,
+        "AWAL_BULAN_HARI": format_hari_id(dt_awal_bulan),
+        "AWAL_BULAN_TANGGAL": format_tanggal_id(dt_awal_bulan),
+        "STATUS_MABIMS": "IMKAN (Istikmal Tidak Berlaku)" if ada_imkan else "BELUM IMKAN (Istikmal 30 Hari)",
+    }
+
+
 def hitung_gerhana_tahunan(tahun: int, tz_jam: float = 7.0) -> list:
     """Mendeteksi daftar Gerhana Matahari & Gerhana Bulan sepanjang tahun (Menu 8 MoonCalc)."""
     tz = timezone(timedelta(hours=tz_jam))
@@ -349,7 +427,7 @@ def hitung_gerhana_tahunan(tahun: int, tz_jam: float = 7.0) -> list:
         g_sun = earth.at(ti).observe(sun).apparent()
         g_moon = earth.at(ti).observe(moon).apparent()
 
-        if ev == 1:  # Konjungsi -> Cek Gerhana Matahari
+        if ev == 1:
             sep = float(g_sun.separation_from(g_moon).degrees)
             if sep < 1.58:
                 jenis = "Gerhana Matahari (Sentral: Total/Cincin)" if sep < 0.98 else "Gerhana Matahari Sebagian"
@@ -358,8 +436,7 @@ def hitung_gerhana_tahunan(tahun: int, tz_jam: float = 7.0) -> list:
                     "Jenis_Gerhana": jenis,
                     "Separasi_Geosentris_Deg": round(sep, 4),
                 })
-        else:  # Oposisi -> Cek Gerhana Bulan
-            # Sudut antara pusat Bulan dan pusat bayangan Bumi (-posisi Matahari)
+        else:
             vec_anti_sun = -g_sun.position.au
             vec_moon = g_moon.position.au
             cos_ang = np.dot(vec_anti_sun, vec_moon) / (np.linalg.norm(vec_anti_sun) * np.linalg.norm(vec_moon))

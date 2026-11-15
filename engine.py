@@ -1,10 +1,9 @@
 import math
 from datetime import datetime, timedelta, timezone
-import numpy as np
 from skyfield.api import load, wgs84
 from skyfield import almanac
 
-# Muat epemeris (otomatis terunduh sekali saat pertama dijalankan)
+# Muat epemeris JPL DE421
 ts = load.timescale()
 eph = load('de421.bsp')
 earth, sun, moon = eph['earth'], eph['sun'], eph['moon']
@@ -23,9 +22,8 @@ def cari_ijtimak_terdekat(t_ref):
     t1 = ts.tt_jd(t_ref.tt + 15)
     f = almanac.oppositions_conjunctions(eph, moon)
     times, events = almanac.find_discrete(t0, t1, f)
-    # event == 1 adalah konjungsi (New Moon / Ijtimak)
     konjungsi = [ti for ti, ev in zip(times, events) if ev == 1]
-    if not konjungsi:
+    if len(konjungsi) == 0:
         return None
     return min(konjungsi, key=lambda ti: abs(ti.tt - t_ref.tt))
 
@@ -84,7 +82,7 @@ def hisab_ghurub(nama: str, lat: float, lon: float, elev_m: float, tz_jam: float
     f_sun = almanac.risings_and_settings(eph, sun, topos, horizon_degrees=alt_sunset_deg)
     t_events, events = almanac.find_discrete(t0, t1, f_sun)
     sunsets = [ti for ti, ev in zip(t_events, events) if ev == 0]
-    if not sunsets:
+    if len(sunsets) == 0:
         return {"Kota": nama, "Error": "Ghurub tidak ditemukan"}
     t_ghurub = sunsets[0]
 
@@ -92,8 +90,8 @@ def hisab_ghurub(nama: str, lat: float, lon: float, elev_m: float, tz_jam: float
     f_moon = almanac.risings_and_settings(eph, moon, topos, horizon_degrees=alt_sunset_deg)
     tm_events, m_events = almanac.find_discrete(t0, ts.tt_jd(t1.tt + 0.25), f_moon)
     moonsets = [ti for ti, ev in zip(tm_events, m_events) if ev == 0]
-    t_moonset = moonsets[0] if moonsets else None
-    lag_menit = ((t_moonset.tt - t_ghurub.tt) * 1440.0) if t_moonset else 0.0
+    t_moonset = moonsets[0] if len(moonsets) > 0 else None
+    lag_menit = ((t_moonset.tt - t_ghurub.tt) * 1440.0) if t_moonset is not None else 0.0
 
     # Posisi Toposentris saat Ghurub
     tekanan = 1010.0 if refraksi else 0.0
@@ -116,7 +114,7 @@ def hisab_ghurub(nama: str, lat: float, lon: float, elev_m: float, tz_jam: float
 
     # Umur Bulan dari Ijtimak terdekat
     t_ijtimak = cari_ijtimak_terdekat(t_ghurub)
-    umur_jam = (t_ghurub.tt - t_ijtimak.tt) * 24.0 if t_ijtimak else 0.0
+    umur_jam = (t_ghurub.tt - t_ijtimak.tt) * 24.0 if t_ijtimak is not None else 0.0
 
     # ARCV geosentris pendekatan untuk Yallop
     alt_s_geo, _, _ = geo_sun.altaz()
@@ -133,17 +131,17 @@ def hisab_ghurub(nama: str, lat: float, lon: float, elev_m: float, tz_jam: float
     )
 
     dt_ghurub_lokal = t_ghurub.astimezone(tz)
-    dt_moonset_lokal = t_moonset.astimezone(tz) if t_moonset else None
-    dt_ijtimak_lokal = t_ijtimak.astimezone(tz) if t_ijtimak else None
+    dt_moonset_lokal = t_moonset.astimezone(tz) if t_moonset is not None else None
+    dt_ijtimak_lokal = t_ijtimak.astimezone(tz) if t_ijtimak is not None else None
 
     return {
         "Kota": nama,
         "Lintang": lat,
         "Bujur": lon,
         "Elevasi_m": elev_m,
-        "Waktu_Ijtimak": dt_ijtimak_lokal.strftime("%Y-%m-%d %H:%M:%S") if dt_ijtimak_lokal else "-",
+        "Waktu_Ijtimak": dt_ijtimak_lokal.strftime("%Y-%m-%d %H:%M:%S") if dt_ijtimak_lokal is not None else "-",
         "Ghurub": dt_ghurub_lokal.strftime("%H:%M:%S"),
-        "Moonset": dt_moonset_lokal.strftime("%H:%M:%S") if dt_moonset_lokal else "-",
+        "Moonset": dt_moonset_lokal.strftime("%H:%M:%S") if dt_moonset_lokal is not None else "-",
         "Lag_Menit": round(lag_menit, 2),
         "Tinggi_Hilal_Deg": round(alt_m.degrees, 4),
         "Elongasi_Geo_Deg": round(elong_geo, 4),

@@ -1,5 +1,5 @@
 import io
-from datetime import datetime, time
+from datetime import datetime, time, date
 import streamlit as st
 import pandas as pd
 from engine import (
@@ -7,14 +7,15 @@ from engine import (
     ra_to_hms,
     hisab_lengkap_markaz,
     hisab_ghurub,
+    susun_baris_rekap_kemenag,
     hitung_gerhana_tahunan,
 )
 
 st.set_page_config(page_title="KawakibCalc — Hisab Rukyat Digital", page_icon="🌙", layout="wide")
 
-st.title("🌙 KawakibCalc v1.1")
+st.title("🌙 KawakibCalc v1.2")
 st.caption(
-    "Aplikasi Web Hisab Posisi Bulan, Visibilitas Hilal & Gerhana — Kawakib Institute | "
+    "Aplikasi Web Hisab Posisi Bulan, Visibilitas Hilal & Rekap Sinkronisasi — Kawakib Institute | "
     "Terinspirasi dari MoonCalc 6.0 (Dr. Monzur Ahmed)"
 )
 
@@ -68,6 +69,28 @@ MARKAZ_INDONESIA = [
     ("Merauke (Titik Timur)", -8.4932, 140.4018, 10, 9.0),
 ]
 
+# Paket Tanggal 29 Sesuai Sheet Kemenag
+PAKET_1448H = [
+    ("Ramadan 1448 H", datetime(2027, 2, 7)),
+    ("Syawal 1448 H", datetime(2027, 3, 8)),
+    ("Zulhijah 1448 H", datetime(2027, 5, 6)),
+]
+
+PAKET_2028M = [
+    ("Ramadan 1449 H", datetime(2028, 1, 27)),
+    ("Syawal 1449 H", datetime(2028, 2, 25)),
+    ("Zulkaidah 1449 H", datetime(2028, 3, 26)),
+    ("Zulhijah 1449 H", datetime(2028, 4, 24)),
+    ("Muharam 1450 H", datetime(2028, 5, 24)),
+    ("Safar 1450 H", datetime(2028, 6, 22)),
+    ("Rabiulawal 1450 H", datetime(2028, 7, 22)),
+    ("Rabiulakhir 1450 H", datetime(2028, 8, 20)),
+    ("Jumadilawal 1450 H", datetime(2028, 9, 19)),
+    ("Jumadilakhir 1450 H", datetime(2028, 10, 18)),
+    ("Rajab 1450 H", datetime(2028, 11, 17)),
+    ("Syakban 1450 H", datetime(2028, 12, 16)),
+]
+
 with st.sidebar:
     st.header("Pengaturan Hisab")
     tgl = st.date_input("Tanggal Pengamatan")
@@ -78,7 +101,8 @@ with st.sidebar:
         [
             "1. Tabel Ringkasan Markaz (4 Layar)",
             "2. Pemindaian Massal Indonesia",
-            "3. Daftar Gerhana Tahunan",
+            "3. Rekap Format Sinkronisasi Kemenag",
+            "4. Daftar Gerhana Tahunan",
         ],
     )
 
@@ -181,7 +205,7 @@ if mode == "1. Tabel Ringkasan Markaz (4 Layar)":
 
         with tab4:
             teks_laporan = f"""====================================================================
-KAWAKIBCALC v1.1 - TABEL DATA HISAB BULAN & HILAL
+KAWAKIBCALC v1.2 - TABEL DATA HISAB BULAN & HILAL
 Kawakib Institute | Inspired by MoonCalc 6.0 by Dr. Monzur Ahmed
 ====================================================================
 Markaz      : {meta['Kota']} (Lat: {meta['Lintang']}, Lon: {meta['Bujur']}, Elev: {meta['Elevasi_m']} m)
@@ -221,7 +245,6 @@ elif mode == "2. Pemindaian Massal Indonesia":
         ]
         df = pd.DataFrame(baris)
 
-        # Ringkasan Ekstrem Terendah & Tertinggi
         c1, c2, c3 = st.columns(3)
         terendah = df.loc[df["Tinggi_Deg"].idxmin()]
         tertinggi = df.loc[df["Tinggi_Deg"].idxmax()]
@@ -233,11 +256,9 @@ elif mode == "2. Pemindaian Massal Indonesia":
 
         st.dataframe(df, use_container_width=True, hide_index=True)
 
-        # Peta Sebaran Markaz
         st.subheader("Peta Sebaran Markaz Pengamatan")
         st.map(df, latitude="Lintang", longitude="Bujur", zoom=3)
 
-        # Unduh Excel
         buf = io.BytesIO()
         df.to_excel(buf, index=False, engine="openpyxl")
         st.download_button(
@@ -248,7 +269,52 @@ elif mode == "2. Pemindaian Massal Indonesia":
         )
 
 # ==============================================================================
-# MODE 3: DAFTAR GERHANA TAHUNAN (MENU 8 MOONCALC)
+# MODE 3: REKAP FORMAT SINKRONISASI KEMENAG (PERSIS KOLOM GOOGLE SHEET)
+# ==============================================================================
+elif mode == "3. Rekap Format Sinkronisasi Kemenag":
+    st.subheader("Rekap Format Google Sheet Sinkronisasi Kemenag (Baris Sistem: Moon Calc)")
+    st.info("Kolom °, ′, ″ pada Tinggi dan Elongasi Geosentris sudah dipisah per sel agar tinggal salin-tempel ke Google Sheet Kemenag.")
+
+    paket = st.radio(
+        "Pilih Paket Tab Sheet Kemenag:",
+        [
+            "Tab 1: Rmdn, Sywl, Zul 1448 H (3 Bulan Kunci)",
+            "Tab 2: Tahun 2028 M (Ramadan 1449 H – Syakban 1450 H)",
+            "Custom: 1 Bulan Tertentu (Sesuai Tanggal di Sidebar)",
+        ],
+    )
+
+    if st.button("Susun Rekap Format Kemenag", type="primary"):
+        if paket.startswith("Tab 1"):
+            daftar_target = PAKET_1448H
+            nama_file = "Rekap_Kemenag_MoonCalc_1448H.xlsx"
+        elif paket.startswith("Tab 2"):
+            daftar_target = PAKET_2028M
+            nama_file = "Rekap_Kemenag_MoonCalc_2028M.xlsx"
+        else:
+            daftar_target = [(f"Bulan Target ({tgl})", datetime(tgl.year, tgl.month, tgl.day))]
+            nama_file = f"Rekap_Kemenag_MoonCalc_{tgl}.xlsx"
+
+        hasil_rekap = []
+        progress = st.progress(0)
+        for idx, (nama_bln, dt_29) in enumerate(daftar_target):
+            hasil_rekap.append(susun_baris_rekap_kemenag(nama_bln, dt_29, MARKAZ_INDONESIA, refraksi))
+            progress.progress((idx + 1) / len(daftar_target))
+
+        df_kemenag = pd.DataFrame(hasil_rekap)
+        st.dataframe(df_kemenag, use_container_width=True, hide_index=True)
+
+        buf = io.BytesIO()
+        df_kemenag.to_excel(buf, index=False, engine="openpyxl")
+        st.download_button(
+            label="📥 Unduh Tabel Format Kemenag (.xlsx)",
+            data=buf.getvalue(),
+            file_name=nama_file,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+# ==============================================================================
+# MODE 4: DAFTAR GERHANA TAHUNAN (MENU 8 MOONCALC)
 # ==============================================================================
 else:
     st.subheader("Daftar Gerhana Matahari & Bulan Tahunan (Menu 8 MoonCalc)")

@@ -102,15 +102,24 @@ def hisab_ghurub(nama: str, lat: float, lon: float, elev_m: float, tz_jam: float
     t_moonset = moonsets_setelah[0] if len(moonsets_setelah) > 0 else None
     lag_menit = float((t_moonset.tt - t_ghurub.tt) * 1440.0) if t_moonset is not None else 0.0
 
-    # Posisi Toposentris saat Ghurub
+    # Posisi Toposentris saat Ghurub (dengan opsi refraksi)
     tekanan = 1010.0 if refraksi else 0.0
     astro_sun = observer.at(t_ghurub).observe(sun).apparent()
     astro_moon = observer.at(t_ghurub).observe(moon).apparent()
 
-    alt_s, az_s, _ = astro_sun.altaz(temperature_C=27.0, pressure_mbar=tekanan)
+    alt_s, az_s, dist_s = astro_sun.altaz(temperature_C=27.0, pressure_mbar=tekanan)
     alt_m, az_m, dist_m = astro_moon.altaz(temperature_C=27.0, pressure_mbar=tekanan)
 
-    # Posisi Geosentris (untuk Elongasi MABIMS & ARCV Yallop)
+    # Tinggi tanpa refraksi & koreksi paralaks untuk mendapatkan ARCV Geosentris Yallop
+    alt_s_noref, _, _ = astro_sun.altaz(pressure_mbar=0.0)
+    alt_m_noref, _, _ = astro_moon.altaz(pressure_mbar=0.0)
+    hp_moon = math.degrees(math.asin(6378.14 / float(dist_m.km)))
+    hp_sun = math.degrees(math.asin(6378.14 / float(dist_s.km)))
+    alt_m_geo = float(alt_m_noref.degrees) + hp_moon * math.cos(math.radians(float(alt_m_noref.degrees)))
+    alt_s_geo = float(alt_s_noref.degrees) + hp_sun * math.cos(math.radians(float(alt_s_noref.degrees)))
+    arcv_geo = alt_m_geo - alt_s_geo
+
+    # Elongasi Geosentris & Toposentris
     geo_sun = earth.at(t_ghurub).observe(sun).apparent()
     geo_moon = earth.at(t_ghurub).observe(moon).apparent()
     elong_geo = float(geo_sun.separation_from(geo_moon).degrees)
@@ -124,11 +133,6 @@ def hisab_ghurub(nama: str, lat: float, lon: float, elev_m: float, tz_jam: float
     # Umur Bulan dari Ijtimak terdekat
     t_ijtimak = cari_ijtimak_terdekat(t_ghurub)
     umur_jam = float((t_ghurub.tt - t_ijtimak.tt) * 24.0) if t_ijtimak is not None else 0.0
-
-    # ARCV geosentris pendekatan untuk Yallop
-    alt_s_geo, _, _ = geo_sun.altaz()
-    alt_m_geo, _, _ = geo_moon.altaz()
-    arcv_geo = float(alt_m_geo.degrees - alt_s_geo.degrees)
 
     kriteria = evaluasi_kriteria(
         alt_topo=float(alt_m.degrees),
